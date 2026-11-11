@@ -148,7 +148,16 @@ async function startConnect() {
         $("connectStatus").className = "status ok"; $("connectStatus").textContent = "Connected " + s.account + ".";
         $("connectBtn").disabled = false;
         await loadAccounts(s.session_id);
-      } else if (s.status === "expired" || s.status === "done") {
+      } else if (s.status === "done") {
+        // The connector already collected the result (it checks once too); the account is linked, so just reload.
+        clearInterval(pollTimer);
+        $("connectStatus").className = "status ok"; $("connectStatus").textContent = "Connected.";
+        $("connectBtn").disabled = false;
+        const before = new Set([...document.querySelectorAll('input[name=acct]')].map((r) => r.value));
+        const d2 = await api("/accounts");
+        const added = d2.accounts.find((a) => !before.has(a.id));
+        await loadAccounts(added ? added.id : undefined);
+      } else if (s.status === "expired") {
         clearInterval(pollTimer);
         $("connectStatus").className = "status err"; $("connectStatus").textContent = "This connect code expired. Click Connect again.";
         $("connectBtn").disabled = false;
