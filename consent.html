@@ -1,0 +1,217 @@
+<!doctype html>
+<!-- NotebookLM MCP: sign-in + account picker for the Supabase Auth OAuth 2.1 server.
+     Supabase Auth redirects here with ?authorization_id=… (Site URL + Authorization Path). Without it, the page
+     lets a signed-in user manage their connected NotebookLM accounts. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>NotebookLM MCP</title>
+<style>
+:root{--bg:#f6f6f3;--fg:#1c1c1a;--muted:#62625c;--card:#fff;--line:#e0e0da;--accent:#1a5fd0;--accent-fg:#fff;--ok:#16743c;--err:#b42318;--sel:#eef3fd}
+@media (prefers-color-scheme:dark){:root{--bg:#151514;--fg:#ececea;--muted:#a1a19b;--card:#1f1f1e;--line:#33332f;--accent:#7aa7ff;--accent-fg:#0d1626;--ok:#5fcf8a;--err:#ff8a7a;--sel:#1d2840}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:560px;margin:48px auto;padding:0 16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:24px}
+h1{font-size:21px;margin:0 0 6px}h2{font-size:15px;margin:22px 0 8px}
+.muted{color:var(--muted)}.small{font-size:14px}
+input[type=email]{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);font:inherit}
+button{border:0;border-radius:8px;padding:10px 16px;font:inherit;cursor:pointer;background:var(--accent);color:var(--accent-fg)}
+button.secondary{background:transparent;color:var(--fg);border:1px solid var(--line)}
+button:disabled{opacity:.55;cursor:default}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.acct{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;margin:8px 0;cursor:pointer}
+.acct:has(input:checked){background:var(--sel);border-color:var(--accent)}
+.acct .grow{flex:1;min-width:0;overflow-wrap:anywhere}
+.badge{font-size:12px;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
+.badge.bad{color:var(--err);border-color:var(--err)}
+.cmd{display:flex;gap:8px;margin-top:8px}
+.cmd code{flex:1;min-width:0;overflow-x:auto;white-space:nowrap;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px}
+.status{font-weight:600;margin-top:12px}.ok{color:var(--ok)}.err{color:var(--err)}
+.linkbtn{background:none;border:0;padding:0;color:var(--accent);cursor:pointer;font:inherit;text-decoration:underline}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main><div class="card">
+  <h1 id="title">NotebookLM MCP</h1>
+  <p id="subtitle" class="muted small"></p>
+
+  <section id="signin" hidden>
+    <p>Sign in to choose which NotebookLM account this app can use.</p>
+    <form id="emailForm">
+      <input id="email" type="email" required placeholder="you@example.com" autocomplete="email">
+      <div class="row"><button type="submit" id="sendLink">Email me a sign-in link</button></div>
+    </form>
+    <p id="sentMsg" class="status ok" hidden>Check your email and open the link on this device. It brings you back here.</p>
+  </section>
+
+  <section id="pick" hidden>
+    <h2>NotebookLM account</h2>
+    <div id="list"></div>
+    <p id="empty" class="muted small" hidden>No NotebookLM accounts connected yet.</p>
+    <div class="row"><button class="secondary" id="connectBtn" type="button">Connect a Google account</button></div>
+
+    <div id="connectBox" hidden>
+      <p class="small">Run this in a terminal on your computer (Node.js 22+, and BrowserOS, Chrome, Brave or Edge). A separate browser
+        window opens; sign in to the Google account whose NotebookLM you want to use. It closes by itself.</p>
+      <div class="cmd"><code id="cmd"></code><button id="copy" type="button">Copy</button></div>
+      <p id="connectStatus" class="status muted">Waiting for you to sign in…</p>
+    </div>
+
+    <div id="consentRow" class="row" hidden>
+      <button id="approve" type="button" disabled>Allow</button>
+      <button id="deny" class="secondary" type="button">Deny</button>
+    </div>
+    <p class="small muted" style="margin-top:18px">Signed in as <span id="who"></span> · <button class="linkbtn" id="signout" type="button">Sign out</button></p>
+  </section>
+
+  <p id="msg" class="status" hidden></p>
+
+  <details class="small muted" style="margin-top:18px"><summary>What gets shared</summary>
+    <p>NotebookLM has no official API, so Google offers no permission for it. The connector opens a fresh browser profile used only
+    for this, sends that profile's Google sign-in to the MCP server over HTTPS, and deletes the profile. The server keeps it encrypted in
+    Supabase Vault and refreshes it every 10 minutes. It never sees your password. To revoke it, sign that session out under
+    Google Account &gt; Security &gt; Your devices, or remove the connector from your app.</p>
+  </details>
+</div></main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/dist/umd/supabase.js"></script>
+<script>
+const SUPABASE_URL = "https://ogzzwslrzaysmdpfdjpl.supabase.co";
+const PUBLISHABLE_KEY = "sb_publishable_aUvorl2GZ-FSFGyyDs0T6Q_cYO57FJt"; // public by design
+const API = SUPABASE_URL + "/functions/v1/notebooklm-mcp";
+
+const $ = (id) => document.getElementById(id);
+const sb = supabase.createClient(SUPABASE_URL, PUBLISHABLE_KEY, { auth: { flowType: "pkce", detectSessionInUrl: true } });
+const params = new URLSearchParams(location.search);
+let authId = params.get("authorization_id");
+try {
+  if (authId) sessionStorage.setItem("nlm_authorization_id", authId);
+  else authId = sessionStorage.getItem("nlm_authorization_id");
+} catch (e) {}
+let clientId = null, token = null, selected = null, pollTimer = null;
+
+function show(id, on = true) { $(id).hidden = !on; }
+function message(text, kind) { const m = $("msg"); m.textContent = text; m.className = "status " + (kind || ""); m.hidden = !text; }
+
+async function api(path, opts = {}) {
+  const r = await fetch(API + path, { ...opts, headers: { "Content-Type": "application/json", Authorization: "Bearer " + token, ...(opts.headers || {}) } });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || ("HTTP " + r.status));
+  return d;
+}
+
+async function loadAccounts(preferId) {
+  const d = await api("/accounts");
+  const list = $("list"); list.replaceChildren();
+  show("empty", d.accounts.length === 0);
+  const active = d.accounts.filter((a) => a.status === "active");
+  selected = preferId || (selected && d.accounts.some((a) => a.id === selected) ? selected : active[0]?.id || null);
+  for (const a of d.accounts) {
+    const label = document.createElement("label"); label.className = "acct";
+    const radio = document.createElement("input"); radio.type = "radio"; radio.name = "acct"; radio.value = a.id;
+    radio.checked = a.id === selected; radio.disabled = a.status !== "active" || !authId;
+    radio.onchange = () => { selected = a.id; $("approve").disabled = false; };
+    if (!authId) radio.hidden = true;
+    const name = document.createElement("span"); name.className = "grow"; name.textContent = a.label || "Google account";
+    const badge = document.createElement("span"); badge.className = "badge" + (a.status === "active" ? "" : " bad");
+    badge.textContent = a.status === "active" ? "connected" : "needs reconnect";
+    label.append(radio, name, badge);
+    if (!authId) {
+      const rm = document.createElement("button"); rm.type = "button"; rm.className = "linkbtn small"; rm.textContent = "Remove";
+      rm.onclick = async (ev) => { ev.preventDefault(); if (!confirm("Remove " + name.textContent + " from the MCP server?")) return;
+        await api("/accounts/remove", { method: "POST", body: JSON.stringify({ session_id: a.id }) }); loadAccounts(); };
+      label.append(rm);
+    }
+    list.append(label);
+  }
+  $("approve").disabled = !selected;
+}
+
+async function startConnect() {
+  $("connectBtn").disabled = true;
+  try {
+    const d = await api("/accounts/connect", { method: "POST", body: "{}" });
+    $("cmd").textContent = d.command;
+    show("connectBox");
+    $("connectStatus").className = "status muted"; $("connectStatus").textContent = "Waiting for you to sign in…";
+    const k = d.code;
+    clearInterval(pollTimer);
+    pollTimer = setInterval(async () => {
+      const r = await fetch(API + "/connect/status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ k }) });
+      const s = await r.json().catch(() => ({}));
+      if (s.status === "connected") {
+        clearInterval(pollTimer);
+        $("connectStatus").className = "status ok"; $("connectStatus").textContent = "Connected " + s.account + ".";
+        $("connectBtn").disabled = false;
+        await loadAccounts(s.session_id);
+      } else if (s.status === "expired" || s.status === "done") {
+        clearInterval(pollTimer);
+        $("connectStatus").className = "status err"; $("connectStatus").textContent = "This connect code expired. Click Connect again.";
+        $("connectBtn").disabled = false;
+      }
+    }, 2000);
+  } catch (e) {
+    message(e.message, "err"); $("connectBtn").disabled = false;
+  }
+}
+
+async function main() {
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) { show("signin"); $("subtitle").textContent = authId ? "An app wants to use your NotebookLM notebooks." : "Manage the NotebookLM accounts connected to the MCP server."; return; }
+  token = session.access_token;
+  $("who").textContent = session.user.email || "your account";
+  show("pick");
+
+  if (authId) {
+    const { data, error } = await sb.auth.oauth.getAuthorizationDetails(authId);
+    if (error || !data) { message("This sign-in request expired or is invalid. Start again from your app. " + (error?.message || ""), "err"); show("pick", false); return; }
+    if (data.redirect_url && !data.client) { location.assign(data.redirect_url); return; } // already approved earlier
+    const c = data.client || {};
+    clientId = c.client_id || c.id || data.client_id || null;
+    $("title").textContent = "Allow " + (c.client_name || c.name || "this app") + "?";
+    $("subtitle").textContent = "It will use the NotebookLM account you pick below: list, read, create and delete notebooks and sources, and ask questions.";
+    show("consentRow");
+  } else {
+    $("subtitle").textContent = "NotebookLM accounts connected to the MCP server.";
+  }
+  await loadAccounts();
+}
+
+$("emailForm").onsubmit = async (ev) => {
+  ev.preventDefault();
+  $("sendLink").disabled = true;
+  const back = location.origin + location.pathname + (authId ? "?authorization_id=" + encodeURIComponent(authId) : "");
+  const { error } = await sb.auth.signInWithOtp({ email: $("email").value.trim(), options: { emailRedirectTo: back } });
+  if (error) { message(error.message, "err"); $("sendLink").disabled = false; return; }
+  show("sentMsg");
+};
+$("connectBtn").onclick = startConnect;
+$("copy").onclick = () => navigator.clipboard.writeText($("cmd").textContent).then(() => { $("copy").textContent = "Copied"; });
+$("signout").onclick = async () => { await sb.auth.signOut(); location.reload(); };
+$("approve").onclick = async () => {
+  if (!selected) return;
+  $("approve").disabled = true; $("deny").disabled = true;
+  try {
+    if (clientId) await api("/accounts/select", { method: "POST", body: JSON.stringify({ client_id: clientId, session_id: selected }) });
+    try { sessionStorage.removeItem("nlm_authorization_id"); } catch (e) {}
+    const { data, error } = await sb.auth.oauth.approveAuthorization(authId);
+    if (error) throw error;
+    message("Allowed. Returning to the app…", "ok");
+    if (data?.redirect_url) location.assign(data.redirect_url);
+  } catch (e) { message(e.message || String(e), "err"); $("approve").disabled = false; $("deny").disabled = false; }
+};
+$("deny").onclick = async () => {
+  try { sessionStorage.removeItem("nlm_authorization_id"); } catch (e) {}
+  const { data, error } = await sb.auth.oauth.denyAuthorization(authId);
+  if (error) return message(error.message, "err");
+  if (data?.redirect_url) location.assign(data.redirect_url);
+};
+sb.auth.onAuthStateChange((event) => { if (event === "SIGNED_IN" && !token) main(); });
+main().catch((e) => message(e.message || String(e), "err"));
+</script>
+</body>
+</html>

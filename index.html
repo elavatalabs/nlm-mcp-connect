@@ -1,0 +1,77 @@
+<!doctype html>
+<!-- Optional connect page for the NotebookLM MCP. Host it on any static host (GitHub Pages, Vercel, Netlify),
+     then set the Edge Function env var CONNECT_PAGE_URL to its URL. The server redirects here with
+     #k=<connect code>&api=<server base>&app=<client name> (fragment, so the code never reaches the host's logs). -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Connect NotebookLM</title>
+<style>
+:root{--bg:#f7f7f5;--fg:#1d1d1b;--muted:#5f5f5a;--card:#fff;--line:#e2e2dd;--accent:#1a5fd0;--ok:#167a3e;--err:#b42318}
+@media (prefers-color-scheme:dark){:root{--bg:#161615;--fg:#ececea;--muted:#a3a39e;--card:#202020;--line:#333;--accent:#7aa7ff;--ok:#5fcf8a;--err:#ff8a7a}}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:640px;margin:48px auto;padding:0 16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:24px 28px}
+h1{font-size:22px;margin:0 0 12px}.muted{color:var(--muted)}ol{padding-left:20px}li{margin:10px 0}
+.cmd{display:flex;gap:8px;margin-top:8px}
+.cmd code{flex:1;min-width:0;overflow-x:auto;white-space:nowrap;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px}
+button{border:0;background:var(--accent);color:#fff;border-radius:8px;padding:0 14px;font:inherit;cursor:pointer}
+.status{font-weight:600}.ok{color:var(--ok)}.err{color:var(--err)}
+pre{white-space:pre-wrap;word-break:break-all;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;font-size:13px}
+details{margin-top:18px;color:var(--muted);font-size:14px}
+</style>
+</head>
+<body>
+<main><div class="card">
+  <h1>Connect your Google NotebookLM</h1>
+  <p id="who" class="muted" hidden></p>
+  <ol>
+    <li>Copy this command and run it in a terminal on your computer (needs Node.js 22+ and Google Chrome, Edge or Brave):
+      <div class="cmd"><code id="cmd">…</code><button id="copy" type="button">Copy</button></div>
+    </li>
+    <li>A separate Chrome window opens. Sign in to the Google account whose NotebookLM you want to use. It closes by itself.</li>
+    <li>This page continues automatically.</li>
+  </ol>
+  <p id="status" class="status">Waiting for you to sign in…</p>
+  <details><summary>What gets shared, and why there's no "Sign in with Google" button</summary>
+    <p>NotebookLM has no official API, so Google offers no OAuth permission for it. The command opens a fresh Chrome profile used
+    only for this, reads that profile's Google sign-in cookies after you sign in, sends them to the server over HTTPS, then deletes the
+    profile. The server keeps the session encrypted in Supabase Vault and refreshes it every 10 minutes, so it doesn't expire. It never
+    sees your password. To revoke access, sign that session out under Google Account &gt; Security &gt; Your devices.</p>
+  </details>
+</div></main>
+<script>
+const h = new URLSearchParams(location.hash.slice(1));
+const k = h.get("k") || "", api = h.get("api") || "", app = h.get("app") || "";
+const st = document.getElementById("status");
+history.replaceState(null, "", location.pathname); // keep the code out of the address bar and history
+if (!k.startsWith("c_") || !/^https:\/\/[^/]+\.supabase\.co\/functions\/v1\/[a-z0-9-]+$/.test(api)) {
+  st.className = "status err"; st.textContent = "This link is incomplete. Start the connection again from your app.";
+} else {
+  if (app) { const w = document.getElementById("who"); w.hidden = false; w.textContent = app + " is asking to use your NotebookLM notebooks."; }
+  document.getElementById("cmd").textContent = `curl -fsSL ${api}/connector.mjs -o nlm-connect.mjs && node nlm-connect.mjs ${k}`;
+  document.getElementById("copy").onclick = () => navigator.clipboard.writeText(document.getElementById("cmd").textContent)
+    .then(() => { document.getElementById("copy").textContent = "Copied"; });
+  const poll = async () => {
+    try {
+      const d = await (await fetch(api + "/connect/status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ k }) })).json();
+      if (d.status === "connected") {
+        st.className = "status ok";
+        if (d.redirect) { st.textContent = `Connected as ${d.account}. Returning to the app…`; location.href = d.redirect; return; }
+        st.textContent = `Connected as ${d.account}. Add this server to your MCP client:`;
+        const pre = document.createElement("pre");
+        pre.textContent = `URL:    ${d.mcp_url}\nHeader: Authorization: Bearer ${d.token}\n\nThis token is shown once. Store it like a password.`;
+        st.after(pre);
+        return;
+      }
+      if (d.status === "expired" || d.status === "done") { st.className = "status err"; st.textContent = "This link expired or was already used. Start again from your app."; return; }
+    } catch (e) {}
+    setTimeout(poll, 2000);
+  };
+  poll();
+}
+</script>
+</body>
+</html>
